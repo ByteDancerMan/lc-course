@@ -1,87 +1,99 @@
-import type {
-  RecognitionResponse,
-  RecipeGenerationResponse,
-  SessionDetail,
-  SessionSummary,
-  SystemStatus,
-  UploadedImage,
-} from '../../shared/types'
+import type { SessionDetail, SessionSummary, UploadedImage } from '../../shared/types'
 
 async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
-
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as
-      | { error?: string }
-      | null
+    const error = (await response.json().catch(() => null)) as { error?: string } | null
     throw new Error(error?.error ?? '请求失败')
   }
-
   return (await response.json()) as T
 }
 
 export const api = {
-  uploadImage(file: File) {
-    const formData = new FormData()
-    formData.append('image', file)
-
-    return request<UploadedImage>('/api/upload-image', {
-      method: 'POST',
-      body: formData,
-    })
-  },
-  recognize(imageUrl: string) {
-    return request<RecognitionResponse>('/api/recognize', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ imageUrl }),
-    })
-  },
-  generateRecipe(payload: {
-    sessionId?: string
-    image: UploadedImage
-    ingredients: RecognitionResponse['ingredients']
-    userPrompt?: string
-  }) {
-    return request<RecipeGenerationResponse>('/api/recipes/generate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-  },
-  chat(sessionId: string, message: string) {
-    return request<{
-      turnId: string
-      assistantMessage: string
-      recommended?: RecipeGenerationResponse['recommended']
-    }>('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ sessionId, message }),
-    })
-  },
   getSessions() {
     return request<{ sessions: SessionSummary[] }>('/api/sessions')
   },
+
+  createSession() {
+    return request<SessionSummary>('/api/sessions', { method: 'POST' })
+  },
+
   getSession(sessionId: string) {
     return request<SessionDetail>(`/api/sessions/${sessionId}`)
   },
-  revertSession(sessionId: string, targetTurnId: string) {
-    return request<{ activeTurnId: string }>(`/api/sessions/${sessionId}/revert`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ targetTurnId }),
+
+  deleteSession(sessionId: string) {
+    return request<{ success: boolean }>(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+  },
+
+  updateSessionTitle(sessionId: string, title: string) {
+    return request<{ success: boolean }>(`/api/sessions/${sessionId}/title`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
     })
   },
-  getSystemStatus() {
-    return request<SystemStatus>('/api/system/status')
+
+  sendMessage(params: { sessionId?: string; message: string; imageUrl?: string; useSearch?: boolean }) {
+    return request<{ sessionId: string; messageId: string; content: string }>('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...params, stream: false }),
+    })
+  },
+
+  uploadImage(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request<UploadedImage>('/api/upload', { method: 'POST', body: formData })
+  },
+
+  async sendMessageStream(
+    params: { sessionId?: string; message: string; imageUrl?: string; useSearch?: boolean },
+    onChunk: (text: string) => void,
+    onDone: (sessionId: string) => void,
+  ): Promise<AbortController> {
+    const controller = new AbortController()
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...params, stream: true }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok || !response.body) {
+      throw new Error('Stream request failed')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const read = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.done) {
+                onDone(data.sessionId)
+                return
+              }
+              if (data.content) {
+                onChunk(data.content)
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      }
+    }
+    read().catch(() => {})
+
+    return controller
   },
 }

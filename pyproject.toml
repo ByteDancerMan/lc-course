@@ -3,19 +3,16 @@ name = "lc-course"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "openai>=2.38.0",
+    "httpx>=0.28.0",
+    "oss2>=2.18.0",
+    "python-dotenv>=1.2.2",
     "dashscope>=1.25.19",
     "ipykernel>=7.2.0",
-    "langchain>=1.3.2",
-    "langchain-community>=0.4.2",
-    "langchain-core>=1.4.0",
-    "langchain-qwq>=0.3.5",
-    "langchain-tavily>=0.2.18",
-    "langgraph-checkpoint-sqlite>=3.1.0",
     "notebook>=7.5.6",
-    "openai>=2.38.0",
-    "python-dotenv>=1.2.2",
-    "pytz>=2026.2",
-    "tzlocal>=5.3.1",
 ]
 
 [[tool.uv.index]]

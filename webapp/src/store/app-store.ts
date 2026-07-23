@@ -1,213 +1,147 @@
 import { create } from 'zustand'
-import type {
-  ChatMessage,
-  IngredientItem,
-  RecipeCandidate,
-  RecipeDetail,
-  SessionDetail,
-  SessionSummary,
-  SystemStatus,
-  UploadedImage,
-} from '../../shared/types'
+import type { ChatMessage, SessionDetail, SessionSummary } from '../../shared/types'
 import { api } from '@/utils/api'
 
 interface AppState {
   sessions: SessionSummary[]
   activeSessionId: string | null
   activeSession: SessionDetail | null
-  uploadedImage: UploadedImage | null
-  ingredients: IngredientItem[]
-  candidates: RecipeCandidate[]
-  recommended: RecipeDetail | null
-  visualSummary: string
-  systemStatus: SystemStatus | null
+  messages: ChatMessage[]
+  streamingText: string
   loading: boolean
-  chatLoading: boolean
-  error: string | null
+  sending: boolean
   bootstrap: () => Promise<void>
-  uploadAndAnalyze: (file: File, prompt?: string) => Promise<void>
-  loadSession: (sessionId: string) => Promise<void>
-  sendChat: (message: string) => Promise<void>
-  revertSession: (targetTurnId: string) => Promise<void>
+  newSession: () => Promise<void>
+  selectSession: (id: string) => Promise<void>
+  deleteSession: (id: string) => Promise<void>
+  sendMessage: (text: string, imageUrl?: string) => Promise<void>
+  stopStream: () => void
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
-  sessions: [],
-  activeSessionId: null,
-  activeSession: null,
-  uploadedImage: null,
-  ingredients: [],
-  candidates: [],
-  recommended: null,
-  visualSummary: '',
-  systemStatus: null,
-  loading: false,
-  chatLoading: false,
-  error: null,
+export const useAppStore = create<AppState>((set, get) => {
+  let abortController: AbortController | null = null
 
-  async bootstrap() {
-    set({ loading: true, error: null })
+  return {
+    sessions: [],
+    activeSessionId: null,
+    activeSession: null,
+    messages: [],
+    streamingText: '',
+    loading: false,
+    sending: false,
 
-    try {
-      const [sessionResponse, systemStatus] = await Promise.all([
-        api.getSessions(),
-        api.getSystemStatus(),
-      ])
-
-      set({
-        sessions: sessionResponse.sessions,
-        systemStatus,
-        loading: false,
-      })
-
-      if (sessionResponse.sessions[0]) {
-        await get().loadSession(sessionResponse.sessions[0].id)
+    async bootstrap() {
+      set({ loading: true })
+      try {
+        const { sessions } = await api.getSessions()
+        set({ sessions, loading: false })
+        if (sessions.length > 0) {
+          await get().selectSession(sessions[0].id)
+        }
+      } catch {
+        set({ loading: false })
       }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : '初始化失败',
-        loading: false,
-      })
-    }
-  },
+    },
 
-  async uploadAndAnalyze(file, prompt) {
-    set({ loading: true, error: null })
+    async newSession() {
+      set({ loading: true })
+      try {
+        const session = await api.createSession()
+        set(state => ({
+          sessions: [session, ...state.sessions],
+          activeSessionId: session.id,
+          activeSession: { ...session, messages: [] },
+          messages: [],
+          streamingText: '',
+          loading: false,
+        }))
+      } catch {
+        set({ loading: false })
+      }
+    },
 
-    try {
-      const uploadedImage = await api.uploadImage(file)
-      const recognized = await api.recognize(uploadedImage.imageUrl)
-      const generated = await api.generateRecipe({
-        image: uploadedImage,
-        ingredients: recognized.ingredients,
-        userPrompt: prompt,
-      })
-      const [sessionResponse, systemStatus] = await Promise.all([
-        api.getSession(generated.sessionId),
-        api.getSystemStatus(),
-      ])
+    async selectSession(id: string) {
+      set({ loading: true })
+      try {
+        const session = await api.getSession(id)
+        set({
+          activeSessionId: id,
+          activeSession: session,
+          messages: session.messages,
+          streamingText: '',
+          loading: false,
+        })
+      } catch {
+        set({ loading: false })
+      }
+    },
 
-      set({
-        uploadedImage,
-        ingredients: recognized.ingredients,
-        visualSummary: recognized.visualSummary,
-        candidates: generated.candidates,
-        recommended: generated.recommended,
-        activeSessionId: generated.sessionId,
-        activeSession: sessionResponse,
-        systemStatus,
-        loading: false,
-      })
+    async deleteSession(id: string) {
+      try {
+        await api.deleteSession(id)
+        const { sessions, activeSessionId } = get()
+        const filtered = sessions.filter(s => s.id !== id)
+        set({ sessions: filtered })
+        if (activeSessionId === id) {
+          if (filtered.length > 0) {
+            await get().selectSession(filtered[0].id)
+          } else {
+            set({ activeSessionId: null, activeSession: null, messages: [], streamingText: '' })
+          }
+        }
+      } catch { /* ignore */ }
+    },
 
-      const sessions = await api.getSessions()
-      set({ sessions: sessions.sessions })
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : '上传分析失败',
-        loading: false,
-      })
-    }
-  },
+    stopStream() {
+      if (abortController) {
+        abortController.abort()
+        abortController = null
+      }
+    },
 
-  async loadSession(sessionId) {
-    set({ loading: true, error: null })
+    async sendMessage(text: string, imageUrl?: string) {
+      const { activeSessionId, messages } = get()
+      const tempUserMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        imageUrl,
+        createdAt: new Date().toISOString(),
+      }
 
-    try {
-      const session = await api.getSession(sessionId)
-      const latestRecipeTurn = [...session.turns].reverse().find((turn) => turn.recommended)
-      const latestIngredientTurn = [...session.turns].reverse().find((turn) => turn.ingredients?.length)
+      set(state => ({
+        messages: [...state.messages, tempUserMsg],
+        sending: true,
+        streamingText: '',
+      }))
 
-      set({
-        activeSessionId: session.id,
-        activeSession: session,
-        uploadedImage: session.coverImageUrl
-          ? {
-              imageId: 'existing',
-              objectKey: session.coverImageUrl,
-              imageUrl: session.coverImageUrl,
-              fileName: 'history-image',
-              contentType: 'image/jpeg',
+      try {
+        const controller = await api.sendMessageStream(
+          { sessionId: activeSessionId ?? undefined, message: text, imageUrl, useSearch: true },
+          (chunk) => {
+            set(state => ({ streamingText: state.streamingText + chunk }))
+          },
+          (newSessionId) => {
+            const { sessions } = get()
+            set({ sending: false })
+            if (!get().activeSessionId) {
+              set({ activeSessionId: newSessionId })
             }
-          : null,
-        candidates: latestRecipeTurn?.candidates ?? [],
-        recommended: latestRecipeTurn?.recommended ?? null,
-        ingredients: latestIngredientTurn?.ingredients ?? [],
-        visualSummary: latestRecipeTurn?.message ?? '',
-        loading: false,
-      })
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : '读取会话失败',
-        loading: false,
-      })
-    }
-  },
-
-  async sendChat(message) {
-    const sessionId = get().activeSessionId
-
-    if (!sessionId) {
-      set({ error: '请先上传食材图片并生成一轮菜谱' })
-      return
-    }
-
-    set({ chatLoading: true, error: null })
-
-    try {
-      const response = await api.chat(sessionId, message)
-      const session = await api.getSession(sessionId)
-      const messages: ChatMessage[] = [
-        ...(get().activeSession?.messages ?? []),
-        {
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: message,
-          createdAt: new Date().toISOString(),
-        },
-        {
-          id: response.turnId,
-          role: 'assistant',
-          content: response.assistantMessage,
-          createdAt: new Date().toISOString(),
-        },
-      ]
-
-      set({
-        activeSession: {
-          ...session,
-          messages,
-        },
-        recommended: response.recommended ?? get().recommended,
-        chatLoading: false,
-      })
-
-      const sessions = await api.getSessions()
-      set({ sessions: sessions.sessions })
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : '继续对话失败',
-        chatLoading: false,
-      })
-    }
-  },
-
-  async revertSession(targetTurnId) {
-    const sessionId = get().activeSessionId
-
-    if (!sessionId) {
-      return
-    }
-
-    set({ loading: true, error: null })
-
-    try {
-      await api.revertSession(sessionId, targetTurnId)
-      await get().loadSession(sessionId)
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : '回退会话失败',
-        loading: false,
-      })
-    }
-  },
-}))
+            api.getSessions().then(({ sessions: updated }) => set({ sessions: updated })).catch(() => {})
+            api.getSession(newSessionId).then(session => {
+              set({
+                activeSessionId: newSessionId,
+                activeSession: session,
+                messages: session.messages,
+                streamingText: '',
+              })
+            }).catch(() => {})
+          },
+        )
+        abortController = controller
+      } catch {
+        set({ sending: false })
+      }
+    },
+  }
+})
