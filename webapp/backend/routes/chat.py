@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from ..config import DASHSCOPE_MODEL, DASHSCOPE_VISION_MODEL
-from ..database import get_session, add_message, create_session, update_session_title, get_sessions
+from ..database import get_session, add_message, create_session, update_session_title, get_sessions, delete_last_assistant_message
 from ..services.ai_service import chat_with_search
 
 router = APIRouter()
@@ -90,3 +90,46 @@ async def chat(req: ChatRequest):
     content = await chat_with_search(messages, search_text, model=model, stream=False)
     msg = add_message(session_id, "assistant", content)
     return {"sessionId": session_id, "messageId": msg["id"], "content": content}
+
+
+class RegenerateRequest(BaseModel):
+    sessionId: str
+    useSearch: bool = True
+
+
+@router.post("/chat/regenerate")
+async def regenerate(req: RegenerateRequest):
+    session = get_session(req.sessionId)
+    if not session:
+        raise HTTPException(404, "会话不存在")
+
+    msgs = session["messages"]
+    last_user = None
+    for m in reversed(msgs):
+        if m["role"] == "user":
+            last_user = m
+            break
+    if not last_user:
+        raise HTTPException(400, "没有用户消息")
+
+    delete_last_assistant_message(req.sessionId)
+    updated = get_session(req.sessionId)
+
+    history = [{"role": m["role"], "content": m["content"]} for m in updated["messages"]]
+    has_image = bool(last_user.get("imageUrl"))
+    model = DASHSCOPE_VISION_MODEL if has_image else DASHSCOPE_MODEL
+    search_text = last_user["content"]
+
+    stream_resp = await chat_with_search(history, search_text, model=model, stream=True)
+
+    async def generate():
+        full_content = ""
+        async for chunk in stream_resp:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_content += content
+                yield f"data: {json.dumps({'content': content, 'sessionId': req.sessionId}, ensure_ascii=False)}\n\n"
+        add_message(req.sessionId, "assistant", full_content)
+        yield f"data: {json.dumps({'done': True, 'sessionId': req.sessionId}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

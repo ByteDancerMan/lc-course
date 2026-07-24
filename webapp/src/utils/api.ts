@@ -26,6 +26,14 @@ export const api = {
     return request<{ success: boolean }>(`/api/sessions/${sessionId}`, { method: 'DELETE' })
   },
 
+  resetToMessage(sessionId: string, messageId: string) {
+    return request<SessionDetail>(`/api/sessions/${sessionId}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId }),
+    })
+  },
+
   updateSessionTitle(sessionId: string, title: string) {
     return request<{ success: boolean }>(`/api/sessions/${sessionId}/title`, {
       method: 'PUT',
@@ -63,6 +71,55 @@ export const api = {
 
     if (!response.ok || !response.body) {
       throw new Error('Stream request failed')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    const read = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.done) {
+                onDone(data.sessionId)
+                return
+              }
+              if (data.content) {
+                onChunk(data.content)
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      }
+    }
+    read().catch(() => {})
+
+    return controller
+  },
+
+  async regenerateStream(
+    sessionId: string,
+    onChunk: (text: string) => void,
+    onDone: (sessionId: string) => void,
+  ): Promise<AbortController> {
+    const controller = new AbortController()
+    const response = await fetch('/api/chat/regenerate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, useSearch: true }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok || !response.body) {
+      throw new Error('Regenerate stream failed')
     }
 
     const reader = response.body.getReader()

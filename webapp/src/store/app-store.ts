@@ -15,6 +15,8 @@ interface AppState {
   selectSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   sendMessage: (text: string, imageUrl?: string) => Promise<void>
+  regenerate: () => Promise<void>
+  resetToMessage: (messageId: string) => Promise<void>
   stopStream: () => void
 }
 
@@ -96,6 +98,47 @@ export const useAppStore = create<AppState>((set, get) => {
       if (abortController) {
         abortController.abort()
         abortController = null
+      }
+    },
+
+    async regenerate() {
+      const { activeSessionId, messages } = get()
+      if (!activeSessionId || messages.length === 0) return
+      set({ sending: true, streamingText: '' })
+      try {
+        const controller = await api.regenerateStream(
+          activeSessionId,
+          (chunk) => {
+            set(state => ({ streamingText: state.streamingText + chunk }))
+          },
+          () => {
+            set({ sending: false })
+            api.getSession(activeSessionId).then(session => {
+              set({ activeSession: session, messages: session.messages, streamingText: '' })
+            }).catch(() => {})
+            api.getSessions().then(({ sessions }) => set({ sessions })).catch(() => {})
+          },
+        )
+        abortController = controller
+      } catch {
+        set({ sending: false })
+      }
+    },
+
+    async resetToMessage(messageId: string) {
+      const { activeSessionId } = get()
+      if (!activeSessionId) return
+      set({ loading: true })
+      try {
+        const session = await api.resetToMessage(activeSessionId, messageId)
+        set({
+          activeSession: session,
+          messages: session.messages,
+          streamingText: '',
+          loading: false,
+        })
+      } catch {
+        set({ loading: false })
       }
     },
 

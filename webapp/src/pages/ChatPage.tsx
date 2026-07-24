@@ -18,6 +18,8 @@ export default function ChatPage() {
     selectSession,
     deleteSession,
     sendMessage,
+    regenerate,
+    resetToMessage,
     stopStream,
   } = useAppStore()
 
@@ -47,6 +49,8 @@ export default function ChatPage() {
           messages={messages}
           streamingText={streamingText}
           sending={sending}
+          onRegenerate={regenerate}
+          onResetToHere={resetToMessage}
         />
         <MessageInput
           onSend={sendMessage}

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Bot, Sparkles } from 'lucide-react'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import type { ChatMessage as ChatMessageType } from '../../shared/types'
 import { ChatMessage } from './ChatMessage'
 
@@ -7,9 +8,11 @@ interface ChatViewProps {
   messages: ChatMessageType[]
   streamingText: string
   sending: boolean
+  onRegenerate: () => void
+  onResetToHere: (messageId: string) => void
 }
 
-export function ChatView({ messages, streamingText, sending }: ChatViewProps) {
+export function ChatView({ messages, streamingText, sending, onRegenerate, onResetToHere }: ChatViewProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -48,19 +51,35 @@ export function ChatView({ messages, streamingText, sending }: ChatViewProps) {
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin">
-      {messages.map(msg => (
-        <ChatMessage key={msg.id} message={msg} />
+      {messages.map((msg, idx) => (
+        <ChatMessage
+          key={msg.id}
+          message={msg}
+          messageIndex={idx}
+          totalMessages={messages.length}
+          onRegenerate={onRegenerate}
+          onResetToHere={onResetToHere}
+        />
       ))}
-      {sending && streamingText && (
+      {sending && (
         <div className="flex gap-3 px-4 py-5 bg-[#f7f7f8]">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#10a37f]">
             <Bot className="h-4 w-4 text-white" />
           </div>
           <div className="min-w-0 flex-1 pt-0.5">
-            <div className="text-sm leading-7 text-[#1f1f1f] whitespace-pre-wrap">
-              {streamingText}
+            {streamingText ? (
+              <MarkdownRenderer content={streamingText} />
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-[#8e8ea0]">
+                <span className="inline-block h-2 w-2 rounded-full bg-[#10a37f] animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="inline-block h-2 w-2 rounded-full bg-[#10a37f] animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="inline-block h-2 w-2 rounded-full bg-[#10a37f] animate-bounce" style={{ animationDelay: '300ms' }} />
+                <span className="ml-1">正在思考...</span>
+              </div>
+            )}
+            {streamingText && (
               <span className="inline-block w-2 h-4 bg-[#10a37f] ml-0.5 animate-pulse" />
-            </div>
+            )}
           </div>
         </div>
       )}

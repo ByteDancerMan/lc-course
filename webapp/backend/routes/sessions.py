@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..database import get_sessions, get_session, create_session, update_session_title, delete_session
+from ..database import get_sessions, get_session, create_session, update_session_title, delete_session, delete_messages_after
 
 router = APIRouter()
 
@@ -36,6 +36,19 @@ async def rename_session(session_id: str, body: UpdateTitleRequest):
         raise HTTPException(404, "会话不存在")
     update_session_title(session_id, body.title)
     return {"success": True}
+
+
+class ResetRequest(BaseModel):
+    messageId: str
+
+
+@router.post("/sessions/{session_id}/reset")
+async def reset_session(session_id: str, body: ResetRequest):
+    existing = get_session(session_id)
+    if not existing:
+        raise HTTPException(404, "会话不存在")
+    delete_messages_after(session_id, body.messageId)
+    return get_session(session_id)
 
 
 @router.delete("/sessions/{session_id}")

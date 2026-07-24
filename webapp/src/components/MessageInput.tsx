@@ -62,6 +62,14 @@ export function MessageInput({ onSend, onStop, sending }: MessageInputProps) {
           </button>
         </div>
       )}
+
+      {sending && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg bg-[#f7f7f8] px-4 py-2.5 text-sm text-[#8e8ea0]">
+          <LoaderCircle className="h-4 w-4 animate-spin text-[#10a37f]" />
+          <span>系统正在处理中，请稍候...</span>
+        </div>
+      )}
+
       <div className="flex items-end gap-2 rounded-xl border border-[#d9d9e3] bg-white px-3 py-2 focus-within:border-[#10a37f] transition-colors">
         <input
           ref={fileRef}
