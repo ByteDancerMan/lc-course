@@ -48,3 +48,32 @@ class MessageModel(Base):
     __table_args__ = (
         Index("idx_messages_session_id", "session_id"),
     )
+
+
+class DocumentModel(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    chunk_count: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[str] = mapped_column(String(19), nullable=False)
+
+    chunks: Mapped[list["ChunkModel"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class ChunkModel(Base):
+    __tablename__ = "chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[bytes | None] = mapped_column(nullable=True)
+
+    document: Mapped["DocumentModel"] = relationship(back_populates="chunks")
+
+    __table_args__ = (
+        Index("idx_chunks_document_id", "document_id"),
+    )

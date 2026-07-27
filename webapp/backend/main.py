@@ -13,6 +13,7 @@ from .database import init_db
 from .routes.chat import router as chat_router
 from .routes.sessions import router as sessions_router
 from .routes.upload import router as upload_router
+from .routes.knowledge import router as knowledge_router
 
 logger = setup_logging()
 
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(chat_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
+app.include_router(knowledge_router, prefix="/api")
 
 # 挂载本地文件上传目录，可通过 /uploads 直接访问
 app.mount("/uploads", StaticFiles(directory=str(Path(__file__).resolve().parent.parent / "storage" / "uploads")), name="uploads")

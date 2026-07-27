@@ -1,4 +1,4 @@
-import type { SessionDetail, SessionSummary, UploadedImage } from '../../shared/types'
+import type { KnowledgeDocument, SessionDetail, SessionSummary, UploadedImage } from '../../shared/types'
 
 async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
@@ -153,5 +153,23 @@ export const api = {
     read().catch(() => {})
 
     return controller
+  },
+
+  uploadKnowledge(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request<{ success: boolean; document: KnowledgeDocument }>('/api/knowledge/upload', { method: 'POST', body: formData })
+  },
+
+  listKnowledge() {
+    return request<{ success: boolean; documents: KnowledgeDocument[] }>('/api/knowledge/list')
+  },
+
+  deleteKnowledge(documentId: string) {
+    return request<{ success: boolean }>('/api/knowledge/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentId }),
+    })
   },
 }

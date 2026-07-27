@@ -2,6 +2,7 @@ import logging
 from openai import AsyncOpenAI
 from ..config import DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL, DASHSCOPE_MODEL, TAVILY_API_KEY
 from .search_service import web_search
+from .knowledge_service import search_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,15 @@ async def chat_with_search(
     elif not TAVILY_API_KEY:
         logger.info("未配置搜索密钥，跳过搜索")
 
-    # 3. 发送请求到 AI 模型
+    # 3. 从知识库检索相关内容
+    knowledge_context = await search_knowledge(search_text)
+    if knowledge_context:
+        if search_context:
+            search_context += "\n\n" + knowledge_context
+        else:
+            search_context = knowledge_context
+
+    # 4. 发送请求到 AI 模型
     client = _get_client()
     if not client:
         logger.error("AI 服务未配置，请设置 DASHSCOPE_API_KEY")

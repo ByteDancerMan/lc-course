@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, Session
 
 from .config import DB_PATH
-from .models import Base, SessionModel, MessageModel, now_beijing
+from .models import Base, SessionModel, MessageModel, DocumentModel, ChunkModel, now_beijing
 
 logger = logging.getLogger(__name__)
 
@@ -174,3 +174,76 @@ def add_message(session_id: str, role: str, content: str, image_url: str | None 
     db.close()
     logger.debug("添加消息 | session=%s role=%s id=%s", session_id, role, msg.id)
     return result
+
+
+def create_document(filename: str, file_type: str, chunk_count: int = 0) -> dict[str, Any]:
+    db = get_db()
+    now = now_beijing()
+    doc = DocumentModel(filename=filename, file_type=file_type, chunk_count=chunk_count, created_at=now)
+    db.add(doc)
+    db.commit()
+    result = {"id": doc.id, "filename": doc.filename, "fileType": doc.file_type, "chunkCount": doc.chunk_count, "createdAt": doc.created_at}
+    db.close()
+    logger.info("创建文档记录 | id=%s filename=%s", doc.id, filename)
+    return result
+
+
+def get_documents() -> list[dict[str, Any]]:
+    db = get_db()
+    rows = db.query(DocumentModel).order_by(DocumentModel.created_at.desc()).all()
+    db.close()
+    return [
+        {"id": r.id, "filename": r.filename, "fileType": r.file_type, "chunkCount": r.chunk_count, "createdAt": r.created_at}
+        for r in rows
+    ]
+
+
+def delete_document(doc_id: str) -> bool:
+    db = get_db()
+    doc = db.query(DocumentModel).filter(DocumentModel.id == doc_id).first()
+    if not doc:
+        db.close()
+        return False
+    db.delete(doc)
+    db.commit()
+    db.close()
+    logger.info("删除文档及切片 | id=%s filename=%s", doc_id, doc.filename)
+    return True
+
+
+def save_chunks(document_id: str, chunks: list[str], embeddings: list[list[float]]):
+    import struct
+    db = get_db()
+    for content, emb in zip(chunks, embeddings):
+        raw = struct.pack(f"{len(emb)}f", *emb)
+        chunk = ChunkModel(document_id=document_id, content=content, embedding=raw)
+        db.add(chunk)
+    doc = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
+    if doc:
+        doc.chunk_count = len(chunks)
+    db.commit()
+    db.close()
+    logger.debug("保存切片 | document=%s chunks=%d", document_id, len(chunks))
+
+
+def search_chunks(query_embedding: list[float], top_k: int) -> list[dict[str, Any]]:
+    import struct
+    import numpy as np
+    db = get_db()
+    all_chunks = db.query(ChunkModel).all()
+    db.close()
+    query_np = np.array(query_embedding, dtype=np.float32)
+    scored = []
+    for c in all_chunks:
+        if not c.embedding:
+            continue
+        emb = np.frombuffer(c.embedding, dtype=np.float32)
+        dot = float(np.dot(query_np, emb))
+        norm = float(np.linalg.norm(query_np)) * float(np.linalg.norm(emb))
+        sim = dot / norm if norm > 0 else 0
+        scored.append((sim, c.content, c.document_id))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [
+        {"content": content, "documentId": doc_id, "score": score}
+        for score, content, doc_id in scored[:top_k]
+    ]

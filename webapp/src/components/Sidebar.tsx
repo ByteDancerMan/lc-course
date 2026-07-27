@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { MessageSquarePlus, Search, Trash2 } from 'lucide-react'
+import { BookOpen, MessageSquarePlus, Search, Trash2 } from 'lucide-react'
 import type { SessionSummary } from '../../shared/types'
+import { KnowledgeModal } from './KnowledgeModal'
 
 interface SidebarProps {
   sessions: SessionSummary[]
@@ -12,6 +13,7 @@ interface SidebarProps {
 
 export function Sidebar({ sessions, activeSessionId, onNewChat, onSelectSession, onDeleteSession }: SidebarProps) {
   const [search, setSearch] = useState('')
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false)
 
   const filtered = search
     ? sessions.filter(s => s.title.toLowerCase().includes(search.toLowerCase()) || s.lastMessage.toLowerCase().includes(search.toLowerCase()))
@@ -19,7 +21,7 @@ export function Sidebar({ sessions, activeSessionId, onNewChat, onSelectSession,
 
   return (
     <aside className="flex h-full flex-col bg-[#f7f7f8] border-r border-[#e5e5e5] w-[280px] min-w-[280px]">
-      <div className="p-3 pb-2">
+      <div className="p-3 pb-2 space-y-2">
         <button
           onClick={onNewChat}
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#d9d9e3] bg-white px-4 py-2.5 text-sm font-medium text-[#1f1f1f] hover:bg-[#f0f0f5] transition-colors"
@@ -27,6 +29,14 @@ export function Sidebar({ sessions, activeSessionId, onNewChat, onSelectSession,
           <MessageSquarePlus className="h-4 w-4" />
           开启新对话
         </button>
+        <button
+          onClick={() => setKnowledgeOpen(true)}
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#d9d9e3] bg-white px-4 py-2.5 text-sm font-medium text-[#1f1f1f] hover:bg-[#f0f0f5] transition-colors"
+        >
+          <BookOpen className="h-4 w-4" />
+          企业知识库
+        </button>
+        <KnowledgeModal open={knowledgeOpen} onClose={() => setKnowledgeOpen(false)} />
       </div>
 
       <div className="px-3 pb-2">

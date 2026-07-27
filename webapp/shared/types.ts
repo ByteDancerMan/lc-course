@@ -28,3 +28,11 @@ export interface UploadedImage {
   fileName: string
   contentType: string
 }
+
+export interface KnowledgeDocument {
+  id: string
+  filename: string
+  fileType: string
+  chunkCount: number
+  createdAt: string
+}
