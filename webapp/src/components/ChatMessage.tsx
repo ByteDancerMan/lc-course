@@ -7,13 +7,13 @@ interface ChatMessageProps {
   message: ChatMessageType
   messageIndex: number
   totalMessages: number
-  onRegenerate?: () => void
+  onRegenerate?: (messageId: string) => void
   onResetToHere?: (messageId: string) => void
 }
 
 export function ChatMessage({ message, messageIndex, totalMessages, onRegenerate, onResetToHere }: ChatMessageProps) {
   const isUser = message.role === 'user'
-  const isLastAssistant = !isUser && messageIndex === totalMessages - 1
+  const showRegen = onRegenerate && !isUser
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -51,9 +51,9 @@ export function ChatMessage({ message, messageIndex, totalMessages, onRegenerate
             <span>{copied ? '已复制' : '复制'}</span>
           </button>
 
-          {!isUser && isLastAssistant && onRegenerate && (
+          {showRegen && (
             <button
-              onClick={onRegenerate}
+              onClick={() => onRegenerate(message.id)}
               className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[#8e8ea0] hover:text-[#1f1f1f] hover:bg-[#e5e5e5] transition-colors"
               title="重新生成"
             >

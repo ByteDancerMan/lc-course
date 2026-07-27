@@ -3,6 +3,8 @@ from ..config import TAVILY_API_KEY
 
 
 async def web_search(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    # 调用 Tavily 搜索 API 获取网络搜索结果
+    # 返回标题和 URL 列表，供 AI 参考
     if not TAVILY_API_KEY:
         return []
     try:

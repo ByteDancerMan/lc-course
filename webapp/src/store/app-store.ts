@@ -15,7 +15,7 @@ interface AppState {
   selectSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   sendMessage: (text: string, imageUrl?: string) => Promise<void>
-  regenerate: () => Promise<void>
+  regenerate: (messageId?: string) => Promise<void>
   resetToMessage: (messageId: string) => Promise<void>
   stopStream: () => void
 }
@@ -101,19 +101,28 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    async regenerate() {
+    async regenerate(messageId?: string) {
       const { activeSessionId, messages } = get()
-      if (!activeSessionId || messages.length === 0) return
-      set({ sending: true, streamingText: '' })
+      if (!activeSessionId) return
+      // 先从前端删除该消息及其之后的所有消息
+      if (messageId) {
+        const idx = messages.findIndex(m => m.id === messageId)
+        if (idx !== -1) {
+          const remaining = messages.slice(0, idx)
+          set({ messages: remaining, streamingText: '' })
+        }
+      }
+      set({ sending: true })
       try {
         const controller = await api.regenerateStream(
           activeSessionId,
+          messageId,
           (chunk) => {
             set(state => ({ streamingText: state.streamingText + chunk }))
           },
           () => {
             set({ sending: false })
-            api.getSession(activeSessionId).then(session => {
+            api.getSession(activeSessionId!).then(session => {
               set({ activeSession: session, messages: session.messages, streamingText: '' })
             }).catch(() => {})
             api.getSessions().then(({ sessions }) => set({ sessions })).catch(() => {})
@@ -122,6 +131,12 @@ export const useAppStore = create<AppState>((set, get) => {
         abortController = controller
       } catch {
         set({ sending: false })
+        const { activeSessionId } = get()
+        if (activeSessionId) {
+          api.getSession(activeSessionId).then(session => {
+            set({ activeSession: session, messages: session.messages, streamingText: '' })
+          }).catch(() => {})
+        }
       }
     },
 

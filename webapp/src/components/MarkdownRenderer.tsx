@@ -1,3 +1,4 @@
+import { ExternalLink } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -76,33 +77,16 @@ const components: Components = {
       {children}
     </blockquote>
   ),
-  a: ({ children, href, ...props }) => {
-    const isRefLink = href?.startsWith('#ref-')
-    if (isRefLink) {
-      return (
-        <sup>
-          <a
-            href={href}
-            className="text-[#10a37f] hover:text-[#0e8c6b] no-underline cursor-pointer font-semibold"
-            title={`引用 ${href.replace('#ref-', '')}`}
-          >
-            {children}
-          </a>
-        </sup>
-      )
-    }
-    return (
-      <a href={href} className="text-[#10a37f] hover:underline" {...props}>
-        {children}
-      </a>
-    )
-  },
-}
-
-const REF_PATTERN = /\[(\d+)\]/g
-
-function preprocessContent(content: string): string {
-  return content.replace(REF_PATTERN, '[$1](#ref-$1)')
+  a: ({ children, href }) => (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-[#1f1f1f]">{children}</span>
+      {href && (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-[#10a37f] hover:text-[#0d8c6b]">
+          <ExternalLink size={14} />
+        </a>
+      )}
+    </span>
+  ),
 }
 
 interface MarkdownRendererProps {
@@ -112,7 +96,7 @@ interface MarkdownRendererProps {
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-      {preprocessContent(content)}
+      {content}
     </ReactMarkdown>
   )
 }

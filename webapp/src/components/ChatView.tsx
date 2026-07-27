@@ -8,7 +8,7 @@ interface ChatViewProps {
   messages: ChatMessageType[]
   streamingText: string
   sending: boolean
-  onRegenerate: () => void
+  onRegenerate: (messageId: string) => void
   onResetToHere: (messageId: string) => void
 }
 

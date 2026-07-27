@@ -107,6 +107,7 @@ export const api = {
 
   async regenerateStream(
     sessionId: string,
+    messageId: string | undefined,
     onChunk: (text: string) => void,
     onDone: (sessionId: string) => void,
   ): Promise<AbortController> {
@@ -114,7 +115,7 @@ export const api = {
     const response = await fetch('/api/chat/regenerate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, useSearch: true }),
+      body: JSON.stringify({ sessionId, messageId, useSearch: true }),
       signal: controller.signal,
     })
 
