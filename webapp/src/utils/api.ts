@@ -100,7 +100,12 @@ export const api = {
         }
       }
     }
-    read().catch(() => {})
+    read().catch((err) => {
+      // 用户主动停止（AbortError）时也通知完成，避免前端状态卡住
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        onDone(params.sessionId ?? '')
+      }
+    })
 
     return controller
   },

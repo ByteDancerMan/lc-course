@@ -1,5 +1,4 @@
 import logging
-import tempfile
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
@@ -21,19 +20,22 @@ SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx
 
 @router.post("/knowledge/upload")
 async def upload_knowledge(file: UploadFile = File(...)):
-    ext = Path(file.filename or "").suffix.lower()
+    # 只取原始文件名的 basename，避免路径穿越
+    original_name = Path(file.filename or "").name
+    ext = Path(original_name).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(400, f"不支持的文件格式: {ext}，仅支持 {', '.join(SUPPORTED_EXTENSIONS)}")
     content = await file.read()
-    save_path = KB_DIR / f"{Path(file.filename).stem}_{len(content)}_{file.filename}"
+    # 先创建文档记录拿到 doc_id，用 doc_id 作为存储文件名（不含用户可控内容）
+    doc = create_document(original_name, ext.lstrip("."))
+    save_path = KB_DIR / f"{doc['id']}{ext}"
     save_path.write_bytes(content)
-    doc = create_document(file.filename, ext.lstrip("."))
     try:
         await index_document(str(save_path), doc["id"])
     except Exception as e:
         delete_document(doc["id"])
         save_path.unlink(missing_ok=True)
-        logger.error("文档索引失败 | filename=%s error=%s", file.filename, e)
+        logger.error("文档索引失败 | filename=%s error=%s", original_name, e)
         raise HTTPException(500, f"文档处理失败: {e}")
     return {"success": True, "document": doc}
 
@@ -53,8 +55,8 @@ async def delete_knowledge(req: DeleteKnowledgeRequest):
     ok = delete_document(req.documentId)
     if not ok:
         raise HTTPException(404, "文档不存在")
-    # 清理存储文件（保留文件本身，由数据库删除级联清理切片）
+    # 清理存储文件：文件名为 {documentId}{ext}，按前缀精确匹配
     for f in KB_DIR.iterdir():
-        if f.is_file() and req.documentId in f.name:
+        if f.is_file() and f.name.startswith(f"{req.documentId}."):
             f.unlink(missing_ok=True)
     return {"success": True}

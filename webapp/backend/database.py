@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
 from typing import Any
-from sqlalchemy import create_engine, func, select
+import sqlite_vec
+from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from .config import DB_PATH
@@ -14,6 +15,38 @@ Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 SessionLocal = sessionmaker(bind=engine)
 
+# vec0 虚拟表的维度，首次创建时确定，后续所有向量必须一致
+_VEC_DIM: int | None = None
+
+
+def _get_vec_dim() -> int:
+    """获取向量维度（首次调用时从已有数据推断或使用配置默认值）"""
+    global _VEC_DIM
+    if _VEC_DIM is not None:
+        return _VEC_DIM
+    from .config import EMBEDDING_DIM
+    _VEC_DIM = EMBEDDING_DIM
+    return _VEC_DIM
+
+
+@event.listens_for(engine, "connect")
+def _on_connect(dbapi_conn, _):
+    # SQLite 默认不启用外键约束，这里在每个连接建立时显式开启
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+    # 加载 sqlite-vec 扩展
+    conn = dbapi_conn
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    # 确保 vec_chunks 虚拟表存在
+    dim = _get_vec_dim()
+    conn.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING "
+        f"vec0(chunk_id TEXT PRIMARY KEY, embedding float[{dim}])"
+    )
+
 
 def get_db() -> Session:
     # 获取一个数据库会话实例
@@ -23,7 +56,35 @@ def get_db() -> Session:
 def init_db():
     # 根据模型定义创建所有数据库表（幂等操作）
     Base.metadata.create_all(engine)
+    # 迁移：将 chunks 表中已有的 embedding 列数据导入 vec_chunks 虚拟表
+    _migrate_embeddings_to_vec()
     logger.info("数据库表初始化完成")
+
+
+def _migrate_embeddings_to_vec():
+    """一次性迁移：把 chunks.embedding 列的旧数据写入 vec_chunks 虚拟表"""
+    db = get_db()
+    try:
+        count = db.execute(text("SELECT COUNT(*) FROM vec_chunks")).scalar()
+        if count and count > 0:
+            db.close()
+            return  # vec_chunks 已有数据，无需迁移
+        rows = db.execute(text("SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL")).fetchall()
+        if not rows:
+            db.close()
+            return
+        dim = _get_vec_dim()
+        for chunk_id, raw_emb in rows:
+            import struct
+            floats = struct.unpack(f"{dim}f", raw_emb)
+            vec_raw = sqlite_vec.serialize_float32(list(floats[:dim]))
+            db.execute(text("INSERT INTO vec_chunks (chunk_id, embedding) VALUES (:cid, :emb)"), {"cid": chunk_id, "emb": vec_raw})
+        db.commit()
+        logger.info("旧 embedding 数据迁移到 vec_chunks 完成 | count=%d", len(rows))
+    except Exception as e:
+        logger.warning("embedding 迁移跳过（可能 vec_chunks 表不存在）: %s", e)
+    finally:
+        db.close()
 
 
 def create_session(title: str = "新对话") -> dict[str, Any]:
@@ -212,12 +273,14 @@ def delete_document(doc_id: str) -> bool:
 
 
 def save_chunks(document_id: str, chunks: list[str], embeddings: list[list[float]]):
-    import struct
     db = get_db()
+    dim = _get_vec_dim()
     for content, emb in zip(chunks, embeddings):
-        raw = struct.pack(f"{len(emb)}f", *emb)
-        chunk = ChunkModel(document_id=document_id, content=content, embedding=raw)
+        chunk = ChunkModel(document_id=document_id, content=content)
         db.add(chunk)
+        db.flush()
+        raw = sqlite_vec.serialize_float32(emb[:dim])
+        db.execute(text("INSERT INTO vec_chunks (chunk_id, embedding) VALUES (:cid, :emb)"), {"cid": chunk.id, "emb": raw})
     doc = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
     if doc:
         doc.chunk_count = len(chunks)
@@ -227,23 +290,32 @@ def save_chunks(document_id: str, chunks: list[str], embeddings: list[list[float
 
 
 def search_chunks(query_embedding: list[float], top_k: int) -> list[dict[str, Any]]:
-    import struct
-    import numpy as np
+    """用 sqlite-vec 的 vec0 索引做 ANN 检索，替代 numpy 暴力扫描"""
     db = get_db()
-    all_chunks = db.query(ChunkModel).all()
+    dim = _get_vec_dim()
+    raw_query = sqlite_vec.serialize_float32(query_embedding[:dim])
+    # vec0 MATCH 返回 (chunk_id, distance)，distance 越小越相似（L2 距离）
+    rows = db.execute(
+        text("SELECT chunk_id, distance FROM vec_chunks "
+             "WHERE embedding MATCH :query ORDER BY distance LIMIT :k"),
+        {"query": raw_query, "k": top_k},
+    ).fetchall()
+    if not rows:
+        db.close()
+        return []
+    chunk_ids = [r[0] for r in rows]
+    distance_map = {r[0]: r[1] for r in rows}
+    # 批量查 chunk 内容（一次查询，避免 N+1）
+    chunk_rows = db.query(ChunkModel).filter(ChunkModel.id.in_(chunk_ids)).all()
     db.close()
-    query_np = np.array(query_embedding, dtype=np.float32)
-    scored = []
-    for c in all_chunks:
-        if not c.embedding:
+    chunk_map = {c.id: c for c in chunk_rows}
+    # L2 距离转相似度分数（0~1，越大越相似），保持和旧接口兼容
+    results = []
+    for cid in chunk_ids:
+        c = chunk_map.get(cid)
+        if not c:
             continue
-        emb = np.frombuffer(c.embedding, dtype=np.float32)
-        dot = float(np.dot(query_np, emb))
-        norm = float(np.linalg.norm(query_np)) * float(np.linalg.norm(emb))
-        sim = dot / norm if norm > 0 else 0
-        scored.append((sim, c.content, c.document_id))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [
-        {"content": content, "documentId": doc_id, "score": score}
-        for score, content, doc_id in scored[:top_k]
-    ]
+        dist = distance_map[cid]
+        score = 1.0 / (1.0 + dist)
+        results.append({"content": c.content, "documentId": c.document_id, "score": score})
+    return results

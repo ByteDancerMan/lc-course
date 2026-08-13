@@ -180,19 +180,23 @@ export const useAppStore = create<AppState>((set, get) => {
             set(state => ({ streamingText: state.streamingText + chunk }))
           },
           (newSessionId) => {
-            const { sessions } = get()
             set({ sending: false })
-            if (!get().activeSessionId) {
-              set({ activeSessionId: newSessionId })
-            }
-            api.getSessions().then(({ sessions: updated }) => set({ sessions: updated })).catch(() => {})
-            api.getSession(newSessionId).then(session => {
-              set({
-                activeSessionId: newSessionId,
-                activeSession: session,
-                messages: session.messages,
-                streamingText: '',
-              })
+            api.getSessions().then(({ sessions: updated }) => {
+              set({ sessions: updated })
+              // 正常完成用返回的 sessionId；主动停止时可能拿不到，回退到当前/最新会话
+              const target = newSessionId || get().activeSessionId || updated[0]?.id
+              if (target) {
+                api.getSession(target).then(session => {
+                  set({
+                    activeSessionId: session.id,
+                    activeSession: session,
+                    messages: session.messages,
+                    streamingText: '',
+                  })
+                }).catch(() => {})
+              } else {
+                set({ streamingText: '' })
+              }
             }).catch(() => {})
           },
         )
