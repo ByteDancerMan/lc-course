@@ -10,11 +10,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:18001',
+        target: 'http://localhost:18000',
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:18001',
+        target: 'http://localhost:18000',
         changeOrigin: true,
       },
     }

@@ -2,6 +2,11 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+
+def _parse_csv_env(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item.strip() for item in value.split(",") if item.strip()]
+
 # 加载项目根目录的 .env 配置文件
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / '.env')
 
@@ -14,7 +19,14 @@ DB_PATH = PROJECT_ROOT / 'storage' / 'chat.db'
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY', '')
 DASHSCOPE_BASE_URL = os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')
 DASHSCOPE_MODEL = os.getenv('DASHSCOPE_MODEL', 'qwen3.7-max')
-DASHSCOPE_VISION_MODEL = os.getenv('DASHSCOPE_VISION_MODEL', 'qwen3.7-max')
+DASHSCOPE_FALLBACK_MODELS = _parse_csv_env('DASHSCOPE_FALLBACK_MODELS') or [
+    'qwen3.7-max-preview',
+    'qwen3.7-max-2026-05-17',
+]
+DASHSCOPE_VISION_MODEL = os.getenv('DASHSCOPE_VISION_MODEL', 'happyhorse-1.1-i2v')
+DASHSCOPE_VISION_FALLBACK_MODELS = _parse_csv_env('DASHSCOPE_VISION_FALLBACK_MODELS') or [
+    'qwen-image-2.0-pro-2026-06-22',
+]
 
 # Tavily 搜索 API 配置
 TAVILY_API_KEY = os.getenv('TAVILY_API_KEY', '')

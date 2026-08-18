@@ -1,6 +1,17 @@
 import logging
+from collections.abc import AsyncIterator
+from typing import Any
+
 from openai import AsyncOpenAI
-from ..config import DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL, DASHSCOPE_MODEL, TAVILY_API_KEY
+from ..config import (
+    DASHSCOPE_API_KEY,
+    DASHSCOPE_BASE_URL,
+    DASHSCOPE_FALLBACK_MODELS,
+    DASHSCOPE_MODEL,
+    DASHSCOPE_VISION_FALLBACK_MODELS,
+    DASHSCOPE_VISION_MODEL,
+    TAVILY_API_KEY,
+)
 from .search_service import web_search
 from .knowledge_service import search_knowledge
 
@@ -24,11 +35,121 @@ def _get_client() -> AsyncOpenAI | None:
     return AsyncOpenAI(api_key=DASHSCOPE_API_KEY, base_url=DASHSCOPE_BASE_URL)
 
 
+def _resolve_model_chain(model: str | None) -> list[str]:
+    primary_model = model or DASHSCOPE_MODEL
+    if primary_model == DASHSCOPE_VISION_MODEL:
+        fallbacks = DASHSCOPE_VISION_FALLBACK_MODELS
+    else:
+        fallbacks = DASHSCOPE_FALLBACK_MODELS
+
+    chain: list[str] = []
+    for candidate in [primary_model, *fallbacks]:
+        if candidate and candidate not in chain:
+            chain.append(candidate)
+    return chain
+
+
+async def _create_chat_completion(
+    client: AsyncOpenAI,
+    messages: list[dict[str, Any]],
+    model: str,
+    stream: bool,
+    **kwargs: Any,
+) -> Any:
+    return await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=stream,
+        **kwargs,
+    )
+
+
+async def _chat_completion_with_fallback(
+    client: AsyncOpenAI,
+    messages: list[dict[str, Any]],
+    model: str | None,
+    stream: bool,
+    **kwargs: Any,
+) -> tuple[str, Any]:
+    model_chain = _resolve_model_chain(model)
+    last_error: Exception | None = None
+
+    for index, candidate in enumerate(model_chain):
+        try:
+            response = await _create_chat_completion(
+                client=client,
+                messages=messages,
+                model=candidate,
+                stream=stream,
+                **kwargs,
+            )
+            if index > 0:
+                logger.warning("模型回退成功 | from=%s to=%s", model_chain[0], candidate)
+            return candidate, response
+        except Exception as exc:
+            last_error = exc
+            is_last = index == len(model_chain) - 1
+            logger.warning(
+                "模型调用失败%s | model=%s error=%s",
+                "，准备尝试备用模型" if not is_last else "",
+                candidate,
+                exc,
+                exc_info=True,
+            )
+
+    assert last_error is not None
+    raise last_error
+
+
+async def _stream_with_fallback(
+    client: AsyncOpenAI,
+    messages: list[dict[str, Any]],
+    model: str | None,
+    **kwargs: Any,
+) -> AsyncIterator[Any]:
+    model_chain = _resolve_model_chain(model)
+    last_error: Exception | None = None
+
+    for index, candidate in enumerate(model_chain):
+        emitted = False
+        try:
+            stream_resp = await _create_chat_completion(
+                client=client,
+                messages=messages,
+                model=candidate,
+                stream=True,
+                **kwargs,
+            )
+            if index > 0:
+                logger.warning("流式模型回退成功 | from=%s to=%s", model_chain[0], candidate)
+
+            async for chunk in stream_resp:
+                emitted = True
+                yield chunk
+            return
+        except Exception as exc:
+            last_error = exc
+            is_last = index == len(model_chain) - 1
+            if emitted:
+                logger.error("流式响应中断 | model=%s error=%s", candidate, exc, exc_info=True)
+                raise
+            logger.warning(
+                "流式模型调用失败%s | model=%s error=%s",
+                "，准备尝试备用模型" if not is_last else "",
+                candidate,
+                exc,
+                exc_info=True,
+            )
+
+    assert last_error is not None
+    raise last_error
+
+
 async def chat_completion(
     messages: list[dict],
     model: str | None = None,
     stream: bool = False,
-) -> str | AsyncOpenAI:
+) -> str | AsyncIterator[Any]:
     # 基础 AI 对话接口，不包含搜索增强
     client = _get_client()
     if not client:
@@ -39,19 +160,21 @@ async def chat_completion(
     full_messages = [system_msg] + messages
 
     if stream:
-        return await client.chat.completions.create(
-            model=model or DASHSCOPE_MODEL,
+        return _stream_with_fallback(
+            client=client,
             messages=full_messages,
-            stream=True,
+            model=model,
             temperature=0.7,
         )
 
-    resp = await client.chat.completions.create(
-        model=model or DASHSCOPE_MODEL,
+    resolved_model, resp = await _chat_completion_with_fallback(
+        client=client,
         messages=full_messages,
+        model=model,
         stream=False,
         temperature=0.7,
     )
+    logger.info("AI API 响应完成 | model=%s", resolved_model)
     return resp.choices[0].message.content or ""
 
 
@@ -69,7 +192,7 @@ async def chat_with_search(
     user_message: str,
     model: str | None = None,
     stream: bool = False,
-) -> str | AsyncOpenAI:
+) -> str | AsyncIterator[Any]:
     # 带搜索增强的 AI 对话接口
     # 1. 提取用户问题中的纯文本
     search_text = _extract_text({"content": user_message}) if isinstance(user_message, str) else user_message
@@ -105,30 +228,34 @@ async def chat_with_search(
         logger.error("AI 服务未配置，请设置 DASHSCOPE_API_KEY")
         return "AI服务未配置。"
 
-    logger.info("AI API 请求 | model=%s stream=%s messages=%d search=%s",
-                model or DASHSCOPE_MODEL, stream, len(messages), bool(search_context))
+    logger.info(
+        "AI API 请求 | model=%s stream=%s messages=%d search=%s",
+        model or DASHSCOPE_MODEL,
+        stream,
+        len(messages),
+        bool(search_context),
+    )
 
     system_msg = {"role": "system", "content": SYSTEM_PROMPT + ("\n\n" + search_context if search_context else "")}
     full_messages = [system_msg] + messages
 
     if stream:
-        # 流式返回：逐 token 输出
-        return await client.chat.completions.create(
-            model=model or DASHSCOPE_MODEL,
+        return _stream_with_fallback(
+            client=client,
             messages=full_messages,
-            stream=True,
+            model=model,
             temperature=0.7,
             max_tokens=4096,
         )
 
-    # 非流式返回：等待完整回复
-    resp = await client.chat.completions.create(
-        model=model or DASHSCOPE_MODEL,
+    resolved_model, resp = await _chat_completion_with_fallback(
+        client=client,
         messages=full_messages,
+        model=model,
         stream=False,
         temperature=0.7,
         max_tokens=4096,
     )
     result = resp.choices[0].message.content or ""
-    logger.info("AI API 响应完成 | len=%d", len(result))
+    logger.info("AI API 响应完成 | model=%s len=%d", resolved_model, len(result))
     return result
